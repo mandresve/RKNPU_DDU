@@ -1,0 +1,4 @@
+# model	detect_substr	soc	purge_pkg	deb_path	sha256	target	status
+orangepi5pro	Orange Pi 5 Pro	RK3588S	linux-image-current-rockchip-rk3588	debs/orangepi5pro-rk3588s-106-arm64.deb	1111111111111111111111111111111111111111111111111111111111111111	0.9.8	supported
+orangepi5b	Orange Pi 5B	RK3588S	linux-image-current-rockchip-rk3588	debs/orangepi5b-rk3588s-108-arm64.deb	2222222222222222222222222222222222222222222222222222222222222222	0.9.8	supported
+orangepi5plus	Orange Pi 5 Plus	RK3588	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
