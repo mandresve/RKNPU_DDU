@@ -67,6 +67,7 @@ curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/main/update.sh 
 |------|--------|
 | `--auto` | Non-interactive: no TUI, assume "yes". Does **not** reboot unless `--reboot`. |
 | `--reboot` | Reboot when the install finishes (useful with `--auto`). |
+| `--ezrknpu[=MODE]` | Also install EZRKNPU. `MODE` = `full` (default), `toolkit`, or `llm`. Works with `--auto` for scripted toolkit installs. |
 | `--dry-run` | Print what would happen; download nothing, change nothing. |
 | `--version` | Print the utility version and exit. |
 | `--help` | Print usage and exit. |
@@ -116,7 +117,16 @@ from a menu:
 - **None**.
 
 It runs EZRKNPU's own `install.sh` (full, or with `-toolkit` / `-llm`) in the terminal.
-This offer is interactive-only; `--auto` simply reports "nothing to do".
+
+For scripting, pass `--ezrknpu[=MODE]` alongside `--auto` to install it non-interactively:
+
+```bash
+# Update the driver (if needed) and install the full EZRKNPU toolkit
+curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/main/update.sh | sudo bash -s -- --auto --ezrknpu
+
+# Only the model-conversion toolkit
+curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/main/update.sh | sudo bash -s -- --auto --ezrknpu=toolkit
+```
 
 ## Contributing a board
 

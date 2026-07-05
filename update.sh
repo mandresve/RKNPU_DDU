@@ -6,6 +6,7 @@ set -u
 
 readonly SELF_NAME="RKNPU_DDU"
 readonly SELF_VERSION="1.0.0"
+readonly SELF_AUTHOR="mandresve"
 readonly REPO="mandresve/RKNPU_DDU"
 readonly BRANCH="main"
 RAW_BASE="${RKNPU_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${BRANCH}}"
@@ -21,7 +22,7 @@ readonly E_OK=0 E_GENERIC=1 E_UNSUPPORTED=2 E_VERSION=3 E_CHECKSUM=4 E_INSTALL=5
 export DEBIAN_FRONTEND=noninteractive
 
 # globals set by parse_args
-MODE="interactive"; DO_REBOOT="no"; DRY_RUN="no"
+MODE="interactive"; DO_REBOOT="no"; DRY_RUN="no"; EZRKNPU=""
 
 # ---------------------------------------------------------------------------
 # Pure functions (testable, no system side effects)
@@ -430,10 +431,18 @@ install runs in this terminal and can take a while."
   esac
 
   case "$choice" in
+    full|toolkit|llm) ezrknpu_install "$choice" ;;
+    *)                ui_info "$SELF_NAME" "No toolkit installed. All done." ;;
+  esac
+}
+
+# Map an EZRKNPU MODE (full|toolkit|llm) to the installer.
+ezrknpu_install() {  # MODE
+  case "$1" in
     full)    run_ezrknpu ""         "EZRKNPU (full: Toolkit 2 + LLM)" ;;
     toolkit) run_ezrknpu "-toolkit" "RKNN Toolkit 2" ;;
     llm)     run_ezrknpu "-llm"     "RKNN LLM" ;;
-    *)       ui_info "$SELF_NAME" "No toolkit installed. All done." ;;
+    *)       ui_error "Unknown EZRKNPU mode: $1"; return 1 ;;
   esac
 }
 
@@ -441,6 +450,11 @@ install runs in this terminal and can take a while."
 # (long, possibly interactive) output stays visible.
 run_ezrknpu() {  # FLAG LABEL
   local flag="$1" label="$2" script rc
+  if [ "$DRY_RUN" = "yes" ]; then
+    ui_info "$SELF_NAME" "[dry-run] Would install $label via:
+  $EZRKNPU_URL $flag"
+    return 0
+  fi
   ui_yesno "Install $label" \
 "About to install: $label
 
@@ -486,7 +500,7 @@ preflight() {
 
 usage() {
   cat <<EOF
-${SELF_NAME} v${SELF_VERSION} — updates the NPU driver (RK3588/RK3588S) to v0.9.8
+${SELF_NAME} v${SELF_VERSION} by ${SELF_AUTHOR} — updates the NPU driver (RK3588/RK3588S) to v0.9.8
 
 Usage:
   # Interactive (TUI): download, then run locally (piping can't reach the TUI)
@@ -496,22 +510,32 @@ Usage:
   curl -fsSL ${RAW_BASE}/update.sh | sudo bash -s -- --auto
 
 Flags:
-  --auto       Non-interactive: no TUI, assume "yes". Does not reboot unless --reboot.
-  --reboot     Reboot when finished (useful with --auto).
-  --dry-run    Show what would happen; download nothing, change nothing.
-  --version    Print the version and exit.
-  --help       Show this help and exit.
+  --auto             Non-interactive: no TUI, assume "yes". No reboot unless --reboot.
+  --reboot           Reboot when finished (useful with --auto).
+  --ezrknpu[=MODE]   Also install EZRKNPU (RKNN Toolkit 2 + LLM). MODE is one of
+                     full (default), toolkit (RKNN Toolkit 2 only) or llm (RKNN LLM
+                     only). Lets --auto scripts install the toolkits too.
+  --dry-run          Show what would happen; download nothing, change nothing.
+  --version          Print the version and exit.
+  --help             Show this help and exit.
 EOF
 }
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --auto)    MODE="auto" ;;
-      --reboot)  DO_REBOOT="yes" ;;
-      --dry-run) DRY_RUN="yes" ;;
-      --version) echo "${SELF_NAME} v${SELF_VERSION}"; exit "$E_OK" ;;
-      --help|-h) usage; exit "$E_OK" ;;
+      --auto)      MODE="auto" ;;
+      --reboot)    DO_REBOOT="yes" ;;
+      --dry-run)   DRY_RUN="yes" ;;
+      --ezrknpu)   EZRKNPU="full" ;;
+      --ezrknpu=*) EZRKNPU="${1#*=}"
+                   case "$EZRKNPU" in
+                     full|toolkit|llm) ;;
+                     *) echo "Invalid --ezrknpu value: '$EZRKNPU' (use full, toolkit or llm)" >&2
+                        exit "$E_GENERIC" ;;
+                   esac ;;
+      --version)   echo "${SELF_NAME} v${SELF_VERSION} by ${SELF_AUTHOR}"; exit "$E_OK" ;;
+      --help|-h)   usage; exit "$E_OK" ;;
       *) echo "Unknown flag: $1" >&2; usage >&2; exit "$E_GENERIC" ;;
     esac
     shift
@@ -551,8 +575,8 @@ main() {
   # Welcome / expectations (interactive only; scripts don't need the banner).
   if [ "$MODE" = "interactive" ]; then
     ui_info "$SELF_NAME" \
-"RKNPU_DDU updates the Rockchip NPU (RK3588/RK3588S) kernel driver on Orange Pi
-boards to v0.9.8, which newer RKLLM models require.
+"${SELF_NAME} by ${SELF_AUTHOR} updates the Rockchip NPU (RK3588/RK3588S) kernel
+driver on Orange Pi boards to v0.9.8, which newer RKLLM models require.
 
 How it works:
  - It REPLACES the kernel image package with a prebuilt one that ships the
@@ -628,7 +652,10 @@ $(device_list_text "$manifest")"
   state=$(version_state "$current" "$target")
   case "$state" in
     uptodate)
-      if [ "$MODE" = "auto" ]; then
+      if [ -n "$EZRKNPU" ]; then
+        ui_info "$SELF_NAME" "Your NPU driver is already at v$current."
+        ezrknpu_install "$EZRKNPU"
+      elif [ "$MODE" = "auto" ]; then
         ui_info "$SELF_NAME" "Your NPU driver is already at v$current. Nothing to do."
       else
         offer_ezrknpu "$current"
@@ -722,6 +749,8 @@ Proceed with the installation?" "yes" \
 Reboot to load it. After rebooting you can re-run RKNPU_DDU, or check:
   sudo cat /sys/kernel/debug/rknpu/version
 It should report v$target."
+
+  [ -n "$EZRKNPU" ] && ezrknpu_install "$EZRKNPU"
 
   if [ "$MODE" = "auto" ]; then
     [ "$DO_REBOOT" = "yes" ] && maybe_reboot

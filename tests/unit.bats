@@ -27,6 +27,29 @@ setup() { load "test_helper"; }
   [ "$MODE" = "auto" ]
 }
 
+@test "--version shows the author branding" {
+  run bash update.sh --version
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"by mandresve"* ]]
+}
+
+@test "parse_args --ezrknpu selects full" {
+  load_update
+  parse_args --auto --ezrknpu
+  [ "$EZRKNPU" = "full" ]
+}
+
+@test "parse_args --ezrknpu=toolkit selects toolkit" {
+  load_update
+  parse_args --ezrknpu=toolkit
+  [ "$EZRKNPU" = "toolkit" ]
+}
+
+@test "invalid --ezrknpu value exits 1" {
+  run bash update.sh --ezrknpu=nope
+  [ "$status" -eq 1 ]
+}
+
 # --- Task 2: version / model ---
 
 @test "parse_driver_version extracts 0.9.6" {
@@ -214,6 +237,16 @@ setup() { load "test_helper"; }
   run bash update.sh --auto --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"Nothing to do"* ]]
+}
+
+@test "uptodate with --ezrknpu --dry-run reports but does not install" {
+  export RKNPU_MANIFEST_FILE="$FIXTURES/manifest.tsv"
+  export RKNPU_MODEL_FILE="$FIXTURES/model_5pro"
+  printf 'RKNPU driver: v0.9.8\n' > "$BATS_TEST_TMPDIR/v098"
+  export RKNPU_VERSION_FILE="$BATS_TEST_TMPDIR/v098"
+  run bash update.sh --auto --ezrknpu --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run] Would install"* ]]
 }
 
 @test "planned model (5 plus) exits 2" {
