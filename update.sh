@@ -11,6 +11,9 @@ readonly BRANCH="main"
 RAW_BASE="${RKNPU_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${BRANCH}}"
 readonly MANIFEST_URL="${RAW_BASE}/manifest.tsv"
 readonly TARGET_FALLBACK="0.9.8"
+# EZRKNPU (https://github.com/Pelochus/ezrknpu): one-command installer for the
+# Rockchip NPU toolkits. Its install.sh takes an optional -toolkit or -llm flag.
+readonly EZRKNPU_URL="https://raw.githubusercontent.com/Pelochus/ezrknpu/main/install.sh"
 
 readonly E_OK=0 E_GENERIC=1 E_UNSUPPORTED=2 E_VERSION=3 E_CHECKSUM=4 E_INSTALL=5
 
@@ -395,6 +398,78 @@ confirm_action() {
   esac
 }
 
+# Offer to install EZRKNPU once the driver is confirmed at the target version.
+# Interactive only. Explains what it does and installs full / toolkit / llm.
+offer_ezrknpu() {  # CURRENT_VERSION
+  local current="$1" choice a
+  ui_info "$SELF_NAME" \
+"Your NPU driver is already at v$current -- nothing to update.
+
+Since the driver is ready, you can optionally install EZRKNPU now.
+EZRKNPU (by Pelochus) is an easy, one-command installer for Rockchip's NPU
+toolkits on Orange Pi:
+
+  - RKNN Toolkit 2 : converts models (ONNX, etc.) to the .rknn format the NPU
+                     runs -- the model-conversion toolkit.
+  - RKNN LLM       : runs LLMs (Qwen, DeepSeek, ...) directly on the NPU.
+
+It installs the required dependencies, packages and libraries for you. The
+install runs in this terminal and can take a while."
+
+  case "$UI_BACKEND" in
+    whiptail|dialog)
+      choice=$(_menu "Install EZRKNPU?" "What would you like to install?" 4 \
+        none    "Do not install anything" \
+        full    "EZRKNPU full  (Toolkit 2 + LLM)" \
+        toolkit "Only RKNN Toolkit 2  (model conversion)" \
+        llm     "Only RKNN LLM  (run LLMs)") || choice=none ;;
+    *)
+      printf '\nInstall EZRKNPU?\n  1) None   2) Full   3) Toolkit only   4) LLM only\nChoose [1]: ' >/dev/tty
+      read -r a </dev/tty || a=""
+      case "$a" in 2) choice=full ;; 3) choice=toolkit ;; 4) choice=llm ;; *) choice=none ;; esac ;;
+  esac
+
+  case "$choice" in
+    full)    run_ezrknpu ""         "EZRKNPU (full: Toolkit 2 + LLM)" ;;
+    toolkit) run_ezrknpu "-toolkit" "RKNN Toolkit 2" ;;
+    llm)     run_ezrknpu "-llm"     "RKNN LLM" ;;
+    *)       ui_info "$SELF_NAME" "No toolkit installed. All done." ;;
+  esac
+}
+
+# Download and run the EZRKNPU installer (optional FLAG), on the console so its
+# (long, possibly interactive) output stays visible.
+run_ezrknpu() {  # FLAG LABEL
+  local flag="$1" label="$2" script rc
+  ui_yesno "Install $label" \
+"About to install: $label
+
+The EZRKNPU installer will run in this terminal and may take a long time.
+Do not close the terminal. Proceed?" "yes" \
+    || { ui_info "$SELF_NAME" "Cancelled. Nothing was installed."; return 0; }
+
+  script=$(mktemp "${TMPDIR:-/tmp}/ezrknpu.XXXXXX") || { ui_error "Could not create a temp file."; return 1; }
+  if ! curl -fsSL "$EZRKNPU_URL" -o "$script" 2>/dev/null || [ ! -s "$script" ]; then
+    rm -f "$script"
+    ui_error "Could not download the EZRKNPU installer from:
+$EZRKNPU_URL"
+    return 1
+  fi
+
+  clear 2>/dev/null || true
+  printf '>>> EZRKNPU installer: %s\n>>> source: %s\n\n' "$label" "$EZRKNPU_URL"
+  if [ -n "$flag" ]; then bash "$script" "$flag"; else bash "$script"; fi
+  rc=$?
+  rm -f "$script"
+
+  if [ "$rc" -eq 0 ]; then
+    ui_info "$SELF_NAME" "$label installed. Done."
+  else
+    ui_error "The EZRKNPU installer exited with code $rc (see the output above)."
+  fi
+  return "$rc"
+}
+
 preflight() {
   if [ "$MODE" != "auto" ] && [ ! -e /dev/tty ]; then
     echo "No TTY available: use --auto for non-interactive mode." >&2; exit "$E_GENERIC"
@@ -553,7 +628,11 @@ $(device_list_text "$manifest")"
   state=$(version_state "$current" "$target")
   case "$state" in
     uptodate)
-      ui_info "$SELF_NAME" "Your NPU driver is already at v$current. Nothing to do."
+      if [ "$MODE" = "auto" ]; then
+        ui_info "$SELF_NAME" "Your NPU driver is already at v$current. Nothing to do."
+      else
+        offer_ezrknpu "$current"
+      fi
       exit "$E_OK" ;;
     unexpected)
       ui_yesno "Unexpected version" \

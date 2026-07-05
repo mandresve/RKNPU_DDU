@@ -103,6 +103,21 @@ Manually check your current driver version at any time:
 sudo cat /sys/kernel/debug/rknpu/version    # e.g. "RKNPU driver: v0.9.6"
 ```
 
+## Bonus: install the NPU toolkits (EZRKNPU)
+
+When you run the tool interactively and the driver is **already at the target version**
+(nothing to update), it offers to install [EZRKNPU](https://github.com/Pelochus/ezrknpu)
+(by Pelochus) — a one-command installer for Rockchip's NPU toolkits on Orange Pi. You pick
+from a menu:
+
+- **Full** — RKNN Toolkit 2 **and** RKNN LLM.
+- **Toolkit 2 only** — the model-conversion toolkit (convert ONNX/etc. to `.rknn`).
+- **LLM only** — run LLMs (Qwen, DeepSeek, …) on the NPU.
+- **None**.
+
+It runs EZRKNPU's own `install.sh` (full, or with `-toolkit` / `-llm`) in the terminal.
+This offer is interactive-only; `--auto` simply reports "nothing to do".
+
 ## Contributing a board
 
 Everything is data-driven: adding a board means dropping its `.deb` into `debs/` and adding
