@@ -137,6 +137,20 @@ setup() { load "test_helper"; }
   [ "$UI_BACKEND" = "auto" ]
 }
 
+@test "maybe_reexec_for_tui is a no-op in --auto mode" {
+  load_update
+  MODE="auto"
+  run maybe_reexec_for_tui --auto
+  [ "$status" -eq 0 ]
+}
+
+@test "maybe_reexec_for_tui is a no-op when already re-exec'd" {
+  load_update
+  MODE="interactive"
+  RKNPU_REEXEC=1 run maybe_reexec_for_tui
+  [ "$status" -eq 0 ]
+}
+
 @test "ui_yesno in auto returns 0 (yes) with default yes" {
   load_update
   UI_BACKEND="auto" run ui_yesno "t" "m" "yes"

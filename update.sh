@@ -16,6 +16,7 @@ readonly E_OK=0 E_GENERIC=1 E_UNSUPPORTED=2 E_VERSION=3 E_CHECKSUM=4 E_INSTALL=5
 
 # globals set by parse_args
 MODE="interactive"; DO_REBOOT="no"; DRY_RUN="no"
+SELF_TMP=""   # temp copy of ourselves when re-exec'd for the TUI (see maybe_reexec_for_tui)
 
 # ---------------------------------------------------------------------------
 # Pure functions (testable, no system side effects)
@@ -292,8 +293,39 @@ parse_args() {
   done
 }
 
+# Under `curl | sudo bash`, this script's stdin is the pipe carrying the script
+# itself. whiptail/dialog can show the first dialog (via </dev/tty) but the next
+# ones hang. For a reliable TUI, re-download ourselves to a temp file and re-exec
+# with stdin attached to the terminal (running as a plain file works fine).
+# Skipped for --auto, when already re-exec'd, or when stdin is already a terminal.
+maybe_reexec_for_tui() {  # "$@" = original args
+  [ "$MODE" = "auto" ] && return 0
+  [ -n "${RKNPU_REEXEC:-}" ] && return 0
+  [ -t 0 ] && return 0
+  [ -e /dev/tty ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local self
+  self=$(mktemp "${TMPDIR:-/tmp}/rknpu-self.XXXXXX") || return 0
+  if curl -fsSL "${RAW_BASE}/update.sh" -o "$self" 2>/dev/null && [ -s "$self" ]; then
+    export RKNPU_REEXEC=1
+    exec bash "$self" "$@" </dev/tty
+  fi
+  rm -f "$self"
+  ui_error \
+"The interactive TUI needs a real terminal, but the script is being piped
+(curl | bash) and I could not re-download myself. Run it in two steps:
+
+  curl -fsSL ${RAW_BASE}/update.sh -o /tmp/rknpu.sh
+  sudo bash /tmp/rknpu.sh
+
+Or run non-interactively:  ... | sudo bash -s -- --auto"
+  exit "$E_GENERIC"
+}
+
 main() {
   parse_args "$@"
+  maybe_reexec_for_tui "$@"
+  [ -n "${RKNPU_REEXEC:-}" ] && SELF_TMP="$0"
   detect_ui
   preflight
 
@@ -316,7 +348,7 @@ package is replaced."
   fi
 
   local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/rknpu.XXXXXX")
-  trap 'rm -rf "$tmp"' EXIT
+  trap 'rm -rf "$tmp"; [ -n "$SELF_TMP" ] && rm -f "$SELF_TMP"' EXIT
 
   local manifest
   manifest=$(fetch_manifest "$tmp/manifest.tsv") \
