@@ -48,17 +48,27 @@ is_valid_sha256() {
   printf '%s' "$1" | grep -qiE '^[0-9a-f]{64}$'
 }
 
-# Find in FILE the first row whose detect_substr (col 2) is a substring of MODEL.
-# Print the row (tab-sep) and return 0; return 1 if none. Skips '#' and blank lines.
+# Find in FILE the first row whose detect_substr (col 2) matches MODEL.
+# detect_substr may hold several '|'-separated alternatives (e.g.
+# "OPi 5 Pro|Orange Pi 5 Pro"); the row matches if ANY alternative is a
+# substring of MODEL. Print the row (tab-sep) and return 0; return 1 if none.
+# Skips '#' and blank lines.
 manifest_find_by_model() {  # FILE MODEL
-  local file="$1" model="$2" line substr
+  local file="$1" model="$2" line patterns alt
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*) continue ;; esac
-    substr=$(printf '%s' "$line" | cut -f2)
-    [ -n "$substr" ] || continue
-    case "$model" in
-      *"$substr"*) printf '%s\n' "$line"; return 0 ;;
-    esac
+    patterns=$(printf '%s' "$line" | cut -f2)
+    [ -n "$patterns" ] || continue
+    while [ -n "$patterns" ]; do
+      case "$patterns" in
+        *'|'*) alt=${patterns%%'|'*}; patterns=${patterns#*'|'} ;;
+        *)     alt=$patterns; patterns='' ;;
+      esac
+      [ -n "$alt" ] || continue
+      case "$model" in
+        *"$alt"*) printf '%s\n' "$line"; return 0 ;;
+      esac
+    done
   done < "$file"
   return 1
 }

@@ -1,15 +1,19 @@
 # RKNPU_DDU device manifest — TAB-separated. Lines starting with # are comments.
 # Columns: model  detect_substr  soc  purge_pkg  deb_path  sha256  target  status
-# ORDER MATTERS: detect_substr is matched as a substring of /proc/device-tree/model,
-# so more-specific names MUST come before the generic "Orange Pi 5" row (last).
+# detect_substr is matched as a substring of /proc/device-tree/model. It may hold
+# several '|'-separated alternatives (no spaces around '|'); the row matches if ANY
+# of them is a substring. Real OrangePi images report e.g. "RK3588S OPi 5 Pro", so
+# we list the "OPi <model>" form (verified on hardware for 5 Pro) plus the
+# "Orange Pi <model>" form defensively.
+# ORDER MATTERS: more-specific names MUST come before the generic "OPi 5" row (last).
 # 'planned' rows await a community-contributed .deb (see how_to_contribute.md);
 # their deb_path/sha256 are '-' and detect_substr/purge_pkg are best-guess until validated.
-orangepi5pro	Orange Pi 5 Pro	RK3588S	linux-image-current-rockchip-rk3588	debs/orangepi5pro-rk3588s-106-arm64.deb	31c60f2941925fb25cc9f703d0269b76dbc39c298456ec69c2771b52c7a12043	0.9.8	supported
-orangepi5b	Orange Pi 5B	RK3588S	linux-image-current-rockchip-rk3588	debs/orangepi5b-rk3588s-108-arm64.deb	76da8e044191e120577e0d176f319711b0b85834a605644ac32e037fa7172110	0.9.8	supported
-orangepi5plus	Orange Pi 5 Plus	RK3588	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
-orangepi5max	Orange Pi 5 Max	RK3588	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
-orangepi5ultra	Orange Pi 5 Ultra	RK3588	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
-orangepicm5-tablet	Orange Pi CM5 Tablet	RK3588S	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
-orangepicm5	Orange Pi CM5	RK3588S	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
-orangepicm4	Orange Pi CM4	RK3566	linux-image-current-rockchip-rk356x	-	-	0.9.8	planned
-orangepi5	Orange Pi 5	RK3588S	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
+orangepi5pro	OPi 5 Pro|Orange Pi 5 Pro	RK3588S	linux-image-current-rockchip-rk3588	debs/orangepi5pro-rk3588s-106-arm64.deb	31c60f2941925fb25cc9f703d0269b76dbc39c298456ec69c2771b52c7a12043	0.9.8	supported
+orangepi5b	OPi 5B|Orange Pi 5B	RK3588S	linux-image-current-rockchip-rk3588	debs/orangepi5b-rk3588s-108-arm64.deb	76da8e044191e120577e0d176f319711b0b85834a605644ac32e037fa7172110	0.9.8	supported
+orangepi5plus	OPi 5 Plus|Orange Pi 5 Plus	RK3588	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
+orangepi5max	OPi 5 Max|Orange Pi 5 Max	RK3588	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
+orangepi5ultra	OPi 5 Ultra|Orange Pi 5 Ultra	RK3588	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
+orangepicm5-tablet	OPi CM5 Tablet|Orange Pi CM5 Tablet	RK3588S	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
+orangepicm5	OPi CM5|Orange Pi CM5	RK3588S	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned
+orangepicm4	OPi CM4|Orange Pi CM4	RK3566	linux-image-current-rockchip-rk356x	-	-	0.9.8	planned
+orangepi5	OPi 5|Orange Pi 5	RK3588S	linux-image-current-rockchip-rk3588	-	-	0.9.8	planned

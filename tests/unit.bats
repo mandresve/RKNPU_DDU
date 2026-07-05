@@ -75,6 +75,15 @@ setup() { load "test_helper"; }
   [ "$status" -ne 0 ]
 }
 
+@test "manifest_find_by_model matches any '|'-separated alternative" {
+  load_update
+  mf="$BATS_TEST_TMPDIR/mf.tsv"
+  printf 'foo\tOPi 5 Pro|Orange Pi 5 Pro\tRK3588S\tpkg\t-\t-\t0.9.8\tsupported\n' > "$mf"
+  run manifest_find_by_model "$mf" "RK3588S OPi 5 Pro"; [ "$status" -eq 0 ]; [[ "$output" == foo* ]]
+  run manifest_find_by_model "$mf" "Some Orange Pi 5 Pro board"; [ "$status" -eq 0 ]
+  run manifest_find_by_model "$mf" "RK3588S OPi 5 Max"; [ "$status" -ne 0 ]
+}
+
 @test "parse_row splits the fields" {
   load_update
   row=$(manifest_find_by_model "$FIXTURES/manifest.tsv" "Orange Pi 5 Pro")
@@ -168,4 +177,16 @@ setup() { load "test_helper"; }
   export RKNPU_VERSION_FILE="$FIXTURES/version_096"
   run bash update.sh --auto --dry-run
   [ "$status" -eq 2 ]
+}
+
+# --- Regression: real on-device model strings (the real manifest.tsv) ---
+
+@test "regression: real orangepi5pro model 'RK3588S OPi 5 Pro' is recognized" {
+  export RKNPU_MANIFEST_FILE="./manifest.tsv"
+  printf 'RK3588S OPi 5 Pro\0' > "$BATS_TEST_TMPDIR/m5pro_real"
+  export RKNPU_MODEL_FILE="$BATS_TEST_TMPDIR/m5pro_real"
+  export RKNPU_VERSION_FILE="$FIXTURES/version_096"
+  run bash update.sh --auto --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run]"* ]]
 }
