@@ -229,6 +229,16 @@ setup() { load "test_helper"; }
   [ "$status" -eq 2 ]
 }
 
+@test "unknown device with --ezrknpu installs the toolkit instead of exiting 2" {
+  export RKNPU_MANIFEST_FILE="$FIXTURES/manifest.tsv"
+  export RKNPU_MODEL_FILE="$FIXTURES/model_unknown"
+  export RKNPU_HOSTNAME=""
+  export RKNPU_VERSION_FILE="$FIXTURES/version_096"
+  run bash update.sh --auto --ezrknpu --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run] Would install"* ]]
+}
+
 @test "already at 0.9.8 exits 0 without installing" {
   export RKNPU_MANIFEST_FILE="$FIXTURES/manifest.tsv"
   export RKNPU_MODEL_FILE="$FIXTURES/model_5pro"

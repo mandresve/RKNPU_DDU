@@ -218,8 +218,8 @@ ui_yesno() {  # TITLE MSG DEFAULT(yes|no)
 _menu() {
   local title="$1" text="$2" mh="$3"; shift 3
   case "$UI_BACKEND" in
-    whiptail) whiptail --title "$title" --menu "$text" 20 74 "$mh" "$@" 3>&1 1>&2 2>&3 </dev/tty ;;
-    dialog)   dialog   --title "$title" --menu "$text" 20 74 "$mh" "$@" 3>&1 1>&2 2>&3 </dev/tty ;;
+    whiptail) whiptail --title "$title" --menu "$text" 23 76 "$mh" "$@" 3>&1 1>&2 2>&3 </dev/tty ;;
+    dialog)   dialog   --title "$title" --menu "$text" 23 76 "$mh" "$@" 3>&1 1>&2 2>&3 </dev/tty ;;
     *)        return 1 ;;
   esac
 }
@@ -401,35 +401,45 @@ confirm_action() {
 
 # Offer to install EZRKNPU once the driver is confirmed at the target version.
 # Interactive only. Explains what it does and installs full / toolkit / llm.
-offer_ezrknpu() {  # CURRENT_VERSION
-  local current="$1" choice a
-  ui_info "$SELF_NAME" \
-"Your NPU driver is already at v$current -- nothing to update.
+# Single-dialog EZRKNPU chooser: shows CONTEXT + what EZRKNPU is + the install
+# options all in ONE dialog, and echoes: none | full | toolkit | llm
+# (plus 'board' when ALLOW_BOARD=board). One dialog so the user decides at once.
+ez_menu() {  # CONTEXT ALLOW_BOARD
+  local ctx="$1" allow="$2" text a
+  text="$ctx
 
-Since the driver is ready, you can optionally install EZRKNPU now.
-EZRKNPU (by Pelochus) is an easy, one-command installer for Rockchip's NPU
-toolkits on Orange Pi:
+EZRKNPU (by Pelochus) is a one-command installer for Rockchip's NPU toolkits:
+ - RKNN Toolkit 2 : converts models (ONNX, ...) to .rknn -- model conversion.
+ - RKNN LLM       : runs LLMs (Qwen, DeepSeek, ...) on the NPU.
+It installs the required dependencies and libraries here in this terminal.
 
-  - RKNN Toolkit 2 : converts models (ONNX, etc.) to the .rknn format the NPU
-                     runs -- the model-conversion toolkit.
-  - RKNN LLM       : runs LLMs (Qwen, DeepSeek, ...) directly on the NPU.
-
-It installs the required dependencies, packages and libraries for you. The
-install runs in this terminal and can take a while."
+Choose what to do:"
 
   case "$UI_BACKEND" in
     whiptail|dialog)
-      choice=$(_menu "Install EZRKNPU?" "What would you like to install?" 4 \
-        none    "Do not install anything" \
-        full    "EZRKNPU full  (Toolkit 2 + LLM)" \
-        toolkit "Only RKNN Toolkit 2  (model conversion)" \
-        llm     "Only RKNN LLM  (run LLMs)") || choice=none ;;
+      set -- none    "Do not install anything" \
+             full    "Install EZRKNPU full  (Toolkit 2 + LLM)" \
+             toolkit "Install only RKNN Toolkit 2  (model conversion)" \
+             llm     "Install only RKNN LLM  (run LLMs)"
+      [ "$allow" = "board" ] && set -- "$@" board "Pick my board manually (update the driver instead)"
+      _menu "EZRKNPU" "$text" 5 "$@" || echo none ;;
     *)
-      printf '\nInstall EZRKNPU?\n  1) None   2) Full   3) Toolkit only   4) LLM only\nChoose [1]: ' >/dev/tty
+      { printf '\n%s\n' "$text"
+        printf '  1) None   2) Full   3) Toolkit only   4) LLM only'
+        [ "$allow" = "board" ] && printf '   5) Pick board manually'
+        printf '\nChoose [1]: '; } >/dev/tty
       read -r a </dev/tty || a=""
-      case "$a" in 2) choice=full ;; 3) choice=toolkit ;; 4) choice=llm ;; *) choice=none ;; esac ;;
+      case "$a" in
+        2) echo full ;; 3) echo toolkit ;; 4) echo llm ;;
+        5) [ "$allow" = "board" ] && echo board || echo none ;;
+        *) echo none ;;
+      esac ;;
   esac
+}
 
+# Offer EZRKNPU on the "driver already up to date" path (no board option).
+offer_ezrknpu() {  # CONTEXT
+  local choice; choice=$(ez_menu "$1" "")
   case "$choice" in
     full|toolkit|llm) ezrknpu_install "$choice" ;;
     *)                ui_info "$SELF_NAME" "No toolkit installed. All done." ;;
@@ -610,34 +620,46 @@ package is replaced."
   fi
   [ -n "$row" ] && parse_row "$row"
 
-  # If detection failed or landed on an unsupported row, offer a manual pick
-  # (whiptail/dialog only); otherwise report it and exit.
+  # If detection failed or landed on an unsupported row: in --auto report and
+  # exit (or install EZRKNPU if requested); interactively offer, in one dialog,
+  # to pick a board manually OR install the EZRKNPU toolkits.
   if [ -z "$row" ] || [ "$ROW_STATUS" != "supported" ]; then
-    local why
+    local why ezchoice pick
     if [ -z "$row" ]; then
       why="Could not identify this board automatically.
   device-tree model: ${model:-<unreadable>}
   hostname         : ${host:-<unknown>}"
     else
       why="Detected '$ROW_MODEL' (via $detect_source), but it is not supported yet
-(status: $ROW_STATUS). No package is available for it in this release."
+(status: $ROW_STATUS). No driver package is available for it in this release."
     fi
-    case "$UI_BACKEND" in
-      whiptail|dialog)
-        ui_info "$SELF_NAME" "$why
 
-You can pick your board manually on the next screen."
-        local pick
+    if [ "$MODE" = "auto" ]; then
+      if [ -n "$EZRKNPU" ]; then
+        ui_info "$SELF_NAME" "$why"
+        ezrknpu_install "$EZRKNPU"
+        exit "$E_OK"
+      fi
+      ui_info "$SELF_NAME" "$why
+
+$(device_list_text "$manifest")"
+      exit "$E_UNSUPPORTED"
+    fi
+
+    ezchoice=$(ez_menu "$why" "board")
+    case "$ezchoice" in
+      board)
         if pick=$(board_menu "$manifest") && [ -n "$pick" ] && row=$(manifest_row_by_id "$manifest" "$pick"); then
           parse_row "$row"; detect_source="manual selection"; detect_value="$pick"
         else
           ui_info "$SELF_NAME" "No board selected. Nothing was changed."
           exit "$E_UNSUPPORTED"
         fi ;;
+      full|toolkit|llm)
+        ezrknpu_install "$ezchoice"
+        exit "$E_OK" ;;
       *)
-        ui_info "$SELF_NAME" "$why
-
-$(device_list_text "$manifest")"
+        ui_info "$SELF_NAME" "Nothing was changed."
         exit "$E_UNSUPPORTED" ;;
     esac
   fi
@@ -658,7 +680,7 @@ $(device_list_text "$manifest")"
       elif [ "$MODE" = "auto" ]; then
         ui_info "$SELF_NAME" "Your NPU driver is already at v$current. Nothing to do."
       else
-        offer_ezrknpu "$current"
+        offer_ezrknpu "Your NPU driver is already at v$current -- nothing to update."
       fi
       exit "$E_OK" ;;
     unexpected)
