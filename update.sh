@@ -36,6 +36,21 @@ get_model() {
   tr -d '\000' < "$f" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
+# Read the hostname (lowercased, trimmed). On OrangePi images it is usually the
+# model id (e.g. "orangepi5pro"), which we use as a detection fallback.
+get_hostname() {
+  local h
+  if [ "${RKNPU_HOSTNAME+set}" = "set" ]; then
+    h="$RKNPU_HOSTNAME"                       # explicit override ("" disables detection)
+  else
+    h=""
+    if command -v hostname >/dev/null 2>&1; then h=$(hostname 2>/dev/null); fi
+    if [ -z "$h" ] && [ -r /etc/hostname ]; then h=$(cat /etc/hostname 2>/dev/null); fi
+    [ -n "$h" ] || h="${HOSTNAME:-}"
+  fi
+  printf '%s' "$h" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
 # Classify the current version vs the target: uptodate | expected | unexpected.
 version_state() {  # CURRENT TARGET
   if [ "$1" = "$2" ]; then echo "uptodate"
@@ -69,6 +84,23 @@ manifest_find_by_model() {  # FILE MODEL
         *"$alt"*) printf '%s\n' "$line"; return 0 ;;
       esac
     done
+  done < "$file"
+  return 1
+}
+
+# Fallback lookup: match HOSTNAME against the model id (col 1) as a substring.
+# On OrangePi images the hostname is usually the model id (e.g. "orangepi5pro").
+# Relies on the same specific-before-generic row ordering as detect_substr.
+manifest_find_by_hostname() {  # FILE HOSTNAME
+  local file="$1" host="$2" line mid
+  [ -n "$host" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    mid=$(printf '%s' "$line" | cut -f1)
+    [ -n "$mid" ] || continue
+    case "$host" in
+      *"$mid"*) printf '%s\n' "$line"; return 0 ;;
+    esac
   done < "$file"
   return 1
 }
@@ -125,8 +157,8 @@ detect_ui() {
 
 ui_info() {  # TITLE MSG
   case "$UI_BACKEND" in
-    whiptail) whiptail --title "$1" --msgbox "$2" 15 78 </dev/tty >/dev/tty 2>&1 ;;
-    dialog)   dialog --title "$1" --msgbox "$2" 15 78 </dev/tty >/dev/tty 2>&1 ;;
+    whiptail) whiptail --title "$1" --msgbox "$2" 20 78 </dev/tty >/dev/tty 2>&1 ;;
+    dialog)   dialog --title "$1" --msgbox "$2" 20 78 </dev/tty >/dev/tty 2>&1 ;;
     *)        printf '\n=== %s ===\n%s\n' "$1" "$2" ;;
   esac
 }
@@ -146,11 +178,11 @@ ui_yesno() {  # TITLE MSG DEFAULT(yes|no)
     whiptail)
       df=""; [ "${3:-yes}" = "no" ] && df="--defaultno"
       # shellcheck disable=SC2086
-      whiptail --title "$1" $df --yesno "$2" 12 78 </dev/tty >/dev/tty 2>&1 ;;
+      whiptail --title "$1" $df --yesno "$2" 15 78 </dev/tty >/dev/tty 2>&1 ;;
     dialog)
       df=""; [ "${3:-yes}" = "no" ] && df="--defaultno"
       # shellcheck disable=SC2086
-      dialog --title "$1" $df --yesno "$2" 12 78 </dev/tty >/dev/tty 2>&1 ;;
+      dialog --title "$1" $df --yesno "$2" 15 78 </dev/tty >/dev/tty 2>&1 ;;
     plain)
       local ans hint="[Y/n]"; [ "${3:-yes}" = "no" ] && hint="[y/N]"
       printf '\n%s\n%s %s ' "$1" "$2" "$hint" >/dev/tty
@@ -265,6 +297,24 @@ main() {
   detect_ui
   preflight
 
+  # Welcome / expectations (interactive only; scripts don't need the banner).
+  if [ "$MODE" = "interactive" ]; then
+    ui_info "$SELF_NAME" \
+"RKNPU_DDU updates the Rockchip NPU (RK3588/RK3588S) kernel driver on Orange Pi
+boards to v0.9.8, which newer RKLLM models require.
+
+How it works:
+ - It REPLACES the kernel image package with a prebuilt one that ships the
+   updated driver. A reboot is needed afterwards to load it.
+ - It first downloads the correct package for your board and verifies its
+   checksum. If the checksum does not match, it aborts and leaves the system
+   untouched.
+ - Nothing is changed until you confirm.
+
+Your files, applications and settings are NOT modified -- only the kernel image
+package is replaced."
+  fi
+
   local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/rknpu.XXXXXX")
   trap 'rm -rf "$tmp"' EXIT
 
@@ -272,47 +322,82 @@ main() {
   manifest=$(fetch_manifest "$tmp/manifest.tsv") \
     || { ui_error "Could not fetch the manifest."; exit "$E_GENERIC"; }
 
-  local model
-  model=$(get_model) \
-    || { ui_error "Could not read /proc/device-tree/model."; exit "$E_UNSUPPORTED"; }
+  # Identify the board: device-tree model first (hardware truth), hostname as fallback.
+  local model host row detect_source detect_value
+  model=$(get_model) || model=""
+  host=$(get_hostname) || host=""
+  if [ -n "$model" ] && row=$(manifest_find_by_model "$manifest" "$model"); then
+    detect_source="device-tree model"; detect_value="$model"
+  elif [ -n "$host" ] && row=$(manifest_find_by_hostname "$manifest" "$host"); then
+    detect_source="hostname"; detect_value="$host"
+  else
+    ui_info "$SELF_NAME" \
+"Could not identify this board as a supported model.
+  device-tree model: ${model:-<unreadable>}
+  hostname         : ${host:-<unknown>}
 
-  local row
-  if ! row=$(manifest_find_by_model "$manifest" "$model"); then
-    ui_info "$SELF_NAME" "Unrecognized device: $model"
+Supported boards are listed below."
     show_device_list "$manifest"
     exit "$E_UNSUPPORTED"
   fi
+
   parse_row "$row"
   if [ "$ROW_STATUS" != "supported" ]; then
-    ui_info "$SELF_NAME" "Detected '$ROW_MODEL' but it is not supported yet (status: $ROW_STATUS)."
+    ui_info "$SELF_NAME" \
+"Detected '$ROW_MODEL' (via $detect_source), but it is not supported yet
+(status: $ROW_STATUS). No package is available for it in this release."
     show_device_list "$manifest"
     exit "$E_UNSUPPORTED"
   fi
-
-  ui_yesno "$SELF_NAME" "Detected device: $ROW_MODEL ($ROW_SOC). Continue?" "yes" \
-    || exit "$E_OK"
 
   local target="${ROW_TARGET:-$TARGET_FALLBACK}" current state
   current=$(get_current_version) \
-    || { ui_error "Could not read the driver version (NPU present? root?)."; exit "$E_VERSION"; }
+    || { ui_error \
+"Could not read the current driver version from
+/sys/kernel/debug/rknpu/version (is the NPU present? are you root?)."; exit "$E_VERSION"; }
   state=$(version_state "$current" "$target")
   case "$state" in
     uptodate)
-      ui_info "$SELF_NAME" "Already at v$current. Nothing to do."
+      ui_info "$SELF_NAME" "Your NPU driver is already at v$current. Nothing to do."
       exit "$E_OK" ;;
     unexpected)
       ui_yesno "Unexpected version" \
-        "Current version v$current (0.9.6 expected). Update to v$target anyway?" "no" \
-        || exit "$E_OK" ;;
+"The current driver is v$current, but this updater expects v0.9.6.
+It can still install v$target, but this path is untested for your version.
+
+Continue anyway?" "no" \
+        || { ui_info "$SELF_NAME" "Cancelled. Nothing was changed."; exit "$E_OK"; } ;;
     expected) : ;;
   esac
 
   is_valid_sha256 "$ROW_SHA" \
     || { ui_error "Incomplete manifest for $ROW_MODEL (invalid sha256)."; exit "$E_GENERIC"; }
 
-  local url deb
+  local url deb debname
   url=$(resolve_deb_url "$ROW_DEBPATH")
   deb="$tmp/update.deb"
+  debname=${ROW_DEBPATH##*/}
+
+  # Explicit plan summary (shown as a dialog interactively; logged in --auto).
+  ui_info "$SELF_NAME" \
+"Update summary
+--------------
+Board             : $ROW_MODEL ($ROW_SOC)
+Identified by     : $detect_source ($detect_value)
+Current driver    : v$current
+Target driver     : v$target
+Package to remove : $ROW_PURGE
+New package       : $debname
+
+When you continue, RKNPU_DDU will:
+ 1. Download the package and verify its checksum.
+ 2. Remove the current kernel package and install the new one.
+ 3. Ask you to reboot (required to load v$target).
+
+It will NOT touch your files, home directory or configuration."
+
+  ui_yesno "$SELF_NAME" "Continue with this update?" "yes" \
+    || { ui_info "$SELF_NAME" "Cancelled. Nothing was changed."; exit "$E_OK"; }
 
   if [ "$DRY_RUN" = "yes" ]; then
     echo "[dry-run] Would download: $url"
@@ -322,26 +407,39 @@ main() {
     exit "$E_OK"
   fi
 
-  echo "Downloading $ROW_MODEL (v$current -> v$target)..."
+  echo "Downloading $ROW_MODEL ($debname)..."
   download_file "$url" "$deb" \
-    || { ui_error "Failed to download the .deb."; exit "$E_GENERIC"; }
+    || { ui_error "Failed to download the package."; exit "$E_GENERIC"; }
   verify_sha256 "$deb" "$ROW_SHA" \
-    || { ui_error "The .deb checksum does NOT match. Aborting without touching the kernel."; exit "$E_CHECKSUM"; }
+    || { ui_error "The package checksum does NOT match. Aborting without touching the kernel."; exit "$E_CHECKSUM"; }
 
-  ui_yesno "Destructive action" \
-    "About to purge '$ROW_PURGE' and install the new kernel. A reboot is required. Proceed?" "yes" \
-    || exit "$E_OK"
+  ui_yesno "Ready to install" \
+"The package was downloaded and its checksum verified.
+
+This is the point of no return: RKNPU_DDU will now remove
+'$ROW_PURGE' and install the new kernel. A reboot will be required afterwards.
+
+Proceed with the installation?" "yes" \
+    || { ui_info "$SELF_NAME" "Cancelled before installing. Nothing was changed."; exit "$E_OK"; }
 
   if ! do_install "$ROW_PURGE" "$deb"; then
-    ui_error "Installation failed. Recover with: sudo apt-get install -y $ROW_PURGE"
+    ui_error \
+"Installation failed. Recover the previous kernel with:
+  sudo apt-get install -y $ROW_PURGE"
     exit "$E_INSTALL"
   fi
 
-  ui_info "$SELF_NAME" "Installed. Reboot to apply; on the next run you will see v$target."
+  ui_info "$SELF_NAME" \
+"Done. The new kernel for $ROW_MODEL (driver v$target) is installed.
+
+Reboot to load it. After rebooting you can re-run RKNPU_DDU, or check:
+  sudo cat /sys/kernel/debug/rknpu/version
+It should report v$target."
+
   if [ "$MODE" = "auto" ]; then
     [ "$DO_REBOOT" = "yes" ] && maybe_reboot
   else
-    ui_yesno "Reboot" "Reboot now?" "yes" && maybe_reboot
+    ui_yesno "Reboot" "Reboot now to load the new driver?" "yes" && maybe_reboot
   fi
   exit "$E_OK"
 }

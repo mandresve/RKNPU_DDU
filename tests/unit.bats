@@ -84,6 +84,20 @@ setup() { load "test_helper"; }
   run manifest_find_by_model "$mf" "RK3588S OPi 5 Max"; [ "$status" -ne 0 ]
 }
 
+@test "get_hostname uses RKNPU_HOSTNAME override, lowercased and trimmed" {
+  load_update
+  RKNPU_HOSTNAME="  OrangePi5Pro  " run get_hostname
+  [ "$output" = "orangepi5pro" ]
+}
+
+@test "manifest_find_by_hostname matches the model id within the hostname" {
+  load_update
+  run manifest_find_by_hostname "$FIXTURES/manifest.tsv" "orangepi5pro"
+  [ "$status" -eq 0 ]; [[ "$output" == orangepi5pro* ]]
+  run manifest_find_by_hostname "$FIXTURES/manifest.tsv" "my-laptop"
+  [ "$status" -ne 0 ]
+}
+
 @test "parse_row splits the fields" {
   load_update
   row=$(manifest_find_by_model "$FIXTURES/manifest.tsv" "Orange Pi 5 Pro")
@@ -156,6 +170,7 @@ setup() { load "test_helper"; }
 @test "unknown device exits 2" {
   export RKNPU_MANIFEST_FILE="$FIXTURES/manifest.tsv"
   export RKNPU_MODEL_FILE="$FIXTURES/model_unknown"
+  export RKNPU_HOSTNAME=""   # disable hostname fallback for a deterministic result
   run bash update.sh --auto --dry-run
   [ "$status" -eq 2 ]
 }
@@ -189,4 +204,28 @@ setup() { load "test_helper"; }
   run bash update.sh --auto --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"[dry-run]"* ]]
+}
+
+@test "hostname fallback identifies the board when the model string is unknown" {
+  export RKNPU_MANIFEST_FILE="./manifest.tsv"
+  printf 'Totally Unknown Board\0' > "$BATS_TEST_TMPDIR/m_unknown"
+  export RKNPU_MODEL_FILE="$BATS_TEST_TMPDIR/m_unknown"
+  export RKNPU_HOSTNAME="orangepi5pro"
+  export RKNPU_VERSION_FILE="$FIXTURES/version_096"
+  run bash update.sh --auto --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run]"* ]]
+  [[ "$output" == *"hostname"* ]]
+}
+
+@test "auto/dry-run prints an explicit update summary" {
+  export RKNPU_MANIFEST_FILE="./manifest.tsv"
+  printf 'RK3588S OPi 5 Pro\0' > "$BATS_TEST_TMPDIR/m5pro_sum"
+  export RKNPU_MODEL_FILE="$BATS_TEST_TMPDIR/m5pro_sum"
+  export RKNPU_VERSION_FILE="$FIXTURES/version_096"
+  run bash update.sh --auto --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Update summary"* ]]
+  [[ "$output" == *"Target driver"* ]]
+  [[ "$output" == *"NOT touch your files"* ]]
 }
