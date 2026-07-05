@@ -14,6 +14,9 @@ readonly TARGET_FALLBACK="0.9.8"
 
 readonly E_OK=0 E_GENERIC=1 E_UNSUPPORTED=2 E_VERSION=3 E_CHECKSUM=4 E_INSTALL=5
 
+# Never let apt/dpkg block on an interactive prompt (would freeze the TUI).
+export DEBIAN_FRONTEND=noninteractive
+
 # globals set by parse_args
 MODE="interactive"; DO_REBOOT="no"; DRY_RUN="no"
 SELF_TMP=""   # temp copy of ourselves when re-exec'd for the TUI (see maybe_reexec_for_tui)
@@ -221,31 +224,114 @@ fetch_manifest() {  # DEST
   printf '%s\n' "$1"
 }
 
-download_file() {  # URL DEST
+download_file() {  # URL DEST (low-level worker for the plain/auto path)
   curl -fSL --progress-bar "$1" -o "$2"
 }
 
-# List the manifest devices with their status.
-show_device_list() {  # FILE
-  printf '\nDevices:\n'
-  local line
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue ;; esac
-    printf '  - %-16s [%s]\n' "$(printf '%s' "$line" | cut -f1)" \
-                              "$(printf '%s' "$line" | cut -f8)"
-  done < "$1"
-}
-
-do_install() {  # PURGE_PKG DEB
+do_install() {  # PURGE_PKG DEB (low-level worker; caller captures its output)
   echo ">> apt purge -y $1"
   apt purge -y "$1" || return 1
   echo ">> dpkg -i $2"
   dpkg -i "$2" || return 1
 }
 
+# Format the device list as text (embedded in a TUI box, or printed plainly).
+device_list_text() {  # FILE
+  printf 'Supported / planned devices:\n'
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    printf '  - %-18s [%s]\n' "$(printf '%s' "$line" | cut -f1)" \
+                              "$(printf '%s' "$line" | cut -f8)"
+  done < "$1"
+}
+
 maybe_reboot() {
-  echo "Rebooting..."
+  case "$UI_BACKEND" in
+    whiptail) whiptail --infobox "Rebooting now..." 7 44 </dev/tty >/dev/tty 2>&1 ;;
+    dialog)   dialog --infobox "Rebooting now..." 7 44 </dev/tty >/dev/tty 2>&1 ;;
+    *)        echo "Rebooting..." ;;
+  esac
   reboot
+}
+
+# ---------------------------------------------------------------------------
+# TUI progress: in whiptail/dialog everything (download, purge, dpkg, copy
+# messages) is shown inside the TUI and nothing leaks to the console. In
+# plain/auto mode the console workers are used as before.
+# ---------------------------------------------------------------------------
+
+# Render a gauge that reads the gauge protocol (percent + message) on stdin.
+_gauge_box() {  # TITLE
+  case "$UI_BACKEND" in
+    whiptail) whiptail --title "$1" --gauge "Starting..." 9 74 0 2>/dev/tty ;;
+    dialog)   dialog --title "$1" --gauge "Starting..." 9 74 0 2>/dev/tty ;;
+  esac
+}
+
+# Show a scrollable text file in the TUI (used for the install log on failure).
+_show_textbox() {  # TITLE FILE
+  case "$UI_BACKEND" in
+    whiptail) whiptail --title "$1" --scrolltext --textbox "$2" 25 78 </dev/tty >/dev/tty 2>&1 ;;
+    dialog)   dialog --title "$1" --textbox "$2" 25 78 </dev/tty >/dev/tty 2>&1 ;;
+  esac
+}
+
+# Download URL to DEST: real-percentage gauge in TUI, console otherwise.
+ui_download() {  # URL DEST
+  case "$UI_BACKEND" in
+    whiptail|dialog) _download_gauge "$1" "$2" ;;
+    *) echo "Downloading ${2##*/}..."; download_file "$1" "$2" ;;
+  esac
+}
+
+_download_gauge() {  # URL DEST
+  local url="$1" dest="$2" total got pct=0
+  total=$(curl -fsSLI "$url" 2>/dev/null | tr -d '\r' \
+            | awk -F': ' 'tolower($1)=="content-length"{v=$2} END{print v}')
+  curl -fsSL "$url" -o "$dest" 2>/dev/null &
+  local pid=$!
+  {
+    while kill -0 "$pid" 2>/dev/null; do
+      got=$(wc -c <"$dest" 2>/dev/null); got=$(( ${got:-0} ))
+      if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
+        pct=$(( got * 100 / total )); [ "$pct" -gt 100 ] && pct=100
+      else
+        pct=$(( (pct + 7) % 100 ))
+      fi
+      printf 'XXX\n%s\nDownloading %s\n%s / %s bytes\nXXX\n' \
+             "$pct" "${dest##*/}" "$got" "${total:-?}"
+      sleep 0.3
+    done
+    printf 'XXX\n100\nDownloading %s\nComplete.\nXXX\n' "${dest##*/}"
+  } | _gauge_box "Download"
+  wait "$pid"
+}
+
+# Run the install (purge + dpkg) with all output to a log, showing a live gauge
+# whose message follows the latest log line; show the full log if it fails.
+ui_install() {  # PURGE_PKG DEB
+  case "$UI_BACKEND" in
+    whiptail|dialog) : ;;
+    *) do_install "$1" "$2"; return "$?" ;;
+  esac
+  local log pid pct=0 line rc
+  log="${2%/*}/install.log"; : > "$log"
+  ( do_install "$1" "$2" >>"$log" 2>&1 </dev/null ) &
+  pid=$!
+  {
+    while kill -0 "$pid" 2>/dev/null; do
+      line=$(tail -n1 "$log" 2>/dev/null | tr -d '\r' | cut -c1-64)
+      printf 'XXX\n%s\nInstalling the new kernel (do not power off)...\n%s\nXXX\n' \
+             "$pct" "${line:-working...}"
+      pct=$(( (pct + 7) % 100 ))
+      sleep 0.4
+    done
+    printf 'XXX\n100\nInstalling the new kernel...\nFinished.\nXXX\n'
+  } | _gauge_box "Installing"
+  wait "$pid"; rc=$?
+  [ "$rc" -ne 0 ] && [ -s "$log" ] && _show_textbox "Installation log (failed)" "$log"
+  return "$rc"
 }
 
 preflight() {
@@ -368,8 +454,7 @@ package is replaced."
   device-tree model: ${model:-<unreadable>}
   hostname         : ${host:-<unknown>}
 
-Supported boards are listed below."
-    show_device_list "$manifest"
+$(device_list_text "$manifest")"
     exit "$E_UNSUPPORTED"
   fi
 
@@ -377,8 +462,9 @@ Supported boards are listed below."
   if [ "$ROW_STATUS" != "supported" ]; then
     ui_info "$SELF_NAME" \
 "Detected '$ROW_MODEL' (via $detect_source), but it is not supported yet
-(status: $ROW_STATUS). No package is available for it in this release."
-    show_device_list "$manifest"
+(status: $ROW_STATUS). No package is available for it in this release.
+
+$(device_list_text "$manifest")"
     exit "$E_UNSUPPORTED"
   fi
 
@@ -432,15 +518,16 @@ It will NOT touch your files, home directory or configuration."
     || { ui_info "$SELF_NAME" "Cancelled. Nothing was changed."; exit "$E_OK"; }
 
   if [ "$DRY_RUN" = "yes" ]; then
-    echo "[dry-run] Would download: $url"
-    echo "[dry-run] Would verify sha256: $ROW_SHA"
-    echo "[dry-run] apt purge -y $ROW_PURGE && dpkg -i <deb>"
-    echo "[dry-run] Reboot: $DO_REBOOT"
+    ui_info "$SELF_NAME" \
+"[dry-run] No changes will be made.
+Would download : $url
+Would verify   : sha256 $ROW_SHA
+Would run      : apt purge -y $ROW_PURGE && dpkg -i <deb>
+Reboot         : $DO_REBOOT"
     exit "$E_OK"
   fi
 
-  echo "Downloading $ROW_MODEL ($debname)..."
-  download_file "$url" "$deb" \
+  ui_download "$url" "$deb" \
     || { ui_error "Failed to download the package."; exit "$E_GENERIC"; }
   verify_sha256 "$deb" "$ROW_SHA" \
     || { ui_error "The package checksum does NOT match. Aborting without touching the kernel."; exit "$E_CHECKSUM"; }
@@ -454,7 +541,7 @@ This is the point of no return: RKNPU_DDU will now remove
 Proceed with the installation?" "yes" \
     || { ui_info "$SELF_NAME" "Cancelled before installing. Nothing was changed."; exit "$E_OK"; }
 
-  if ! do_install "$ROW_PURGE" "$deb"; then
+  if ! ui_install "$ROW_PURGE" "$deb"; then
     ui_error \
 "Installation failed. Recover the previous kernel with:
   sudo apt-get install -y $ROW_PURGE"
