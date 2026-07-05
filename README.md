@@ -32,13 +32,20 @@ compile the kernel and submit a `.deb` for your board.
 
 ### Interactive (default, TUI)
 
+Download first, then run it locally:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.sh -o /tmp/rknpu.sh && sudo bash /tmp/rknpu.sh
 ```
 
-The tool auto-detects your board, asks you to confirm, shows the current vs. target driver
-version, downloads and verifies the correct `.deb`, asks for confirmation before the
-destructive step, installs it, and offers to reboot.
+> **Why not `curl … | sudo bash`?** When the script is piped into `sudo`, `sudo`'s
+> pseudo-terminal (`use_pty`, the default on Ubuntu/OrangePi) is fed by the pipe, not by
+> your keyboard, so the TUI can't receive input and hangs. Running from a downloaded file
+> gives `sudo` the real terminal, so the TUI works. Piping is still fine for `--auto`.
+
+The tool auto-detects your board (with a menu to correct it if wrong), shows the current
+vs. target driver version, downloads and verifies the correct `.deb`, asks for confirmation
+before the destructive step, installs it, and offers to reboot.
 
 ### Automatic / scripted (non-interactive)
 
@@ -55,9 +62,9 @@ curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.s
 curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.sh | sudo bash -s -- --auto --dry-run
 ```
 
-> **Why `/dev/tty`?** Because `curl | bash` feeds the script through `stdin`, all prompts
-> read from `/dev/tty` instead. On a truly headless host with no controlling terminal you
-> must use `--auto`.
+> `--auto` needs no terminal, so piping into `sudo bash` is fine here (and is the right
+> choice on headless hosts). For the interactive TUI, use the two-step download-then-run
+> command shown above.
 
 ## Flags
 

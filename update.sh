@@ -19,7 +19,6 @@ export DEBIAN_FRONTEND=noninteractive
 
 # globals set by parse_args
 MODE="interactive"; DO_REBOOT="no"; DRY_RUN="no"
-SELF_TMP=""   # temp copy of ourselves when re-exec'd for the TUI (see maybe_reexec_for_tui)
 
 # ---------------------------------------------------------------------------
 # Pure functions (testable, no system side effects)
@@ -414,9 +413,12 @@ usage() {
   cat <<EOF
 ${SELF_NAME} v${SELF_VERSION} — updates the NPU driver (RK3588/RK3588S) to v0.9.8
 
-Usage (one-liner):
-  curl -fsSL ${RAW_BASE}/update.sh | sudo bash                 # interactive (TUI)
-  curl -fsSL ${RAW_BASE}/update.sh | sudo bash -s -- --auto    # automatic
+Usage:
+  # Interactive (TUI): download, then run locally (piping can't reach the TUI)
+  curl -fsSL ${RAW_BASE}/update.sh -o /tmp/rknpu.sh && sudo bash /tmp/rknpu.sh
+
+  # Automatic (scripted): piping is fine, no terminal needed
+  curl -fsSL ${RAW_BASE}/update.sh | sudo bash -s -- --auto
 
 Flags:
   --auto       Non-interactive: no TUI, assume "yes". Does not reboot unless --reboot.
@@ -441,43 +443,33 @@ parse_args() {
   done
 }
 
-# Under `curl | sudo bash`, this script's stdin is the pipe carrying the script
-# itself. whiptail/dialog can show the first dialog (via </dev/tty) but the next
-# ones hang. For a reliable TUI, re-download ourselves to a temp file and re-exec
-# with stdin attached to the terminal (running as a plain file works fine).
-# Skipped for --auto, when already re-exec'd, or when running from a real file.
-maybe_reexec_for_tui() {  # "$@" = original args
+# The interactive TUI must run from a LOCAL FILE. A piped `curl | sudo bash`
+# gives sudo a pseudo-terminal fed by the pipe (sudo's stdin), not by the
+# keyboard, so /dev/tty cannot receive input and the TUI hangs. Running from a
+# downloaded file makes sudo's stdin the real terminal, so the keyboard works.
+# Detect file-vs-pipe with BASH_SOURCE (empty when piped) -- NOT `[ -t 0 ]`,
+# which is fooled by sudo's use_pty. If piped and interactive, print the
+# two-step command and exit instead of hanging. (--auto needs no terminal.)
+require_local_run() {
   [ "$MODE" = "auto" ] && return 0
-  [ -n "${RKNPU_REEXEC:-}" ] && return 0
-  # Are we running from a real script file (not piped)? Do NOT use `[ -t 0 ]`:
-  # sudo's `use_pty` (default on Ubuntu/OrangePi) puts a pty on stdin even when
-  # the script is piped in. BASH_SOURCE reliably tells file from pipe.
   local src="${BASH_SOURCE[0]:-}"
   [ -n "$src" ] && [ -f "$src" ] && return 0
-  [ -e /dev/tty ] || return 0
-  command -v curl >/dev/null 2>&1 || return 0
-  local self
-  self=$(mktemp "${TMPDIR:-/tmp}/rknpu-self.XXXXXX") || return 0
-  if curl -fsSL --connect-timeout 15 "${RAW_BASE}/update.sh" -o "$self" 2>/dev/null && [ -s "$self" ]; then
-    export RKNPU_REEXEC=1
-    exec bash "$self" "$@" </dev/tty
-  fi
-  rm -f "$self"
-  ui_error \
-"The interactive TUI needs a real terminal, but the script is being piped
-(curl | bash) and I could not re-download myself. Run it in two steps:
+  printf '%s\n' \
+"RKNPU_DDU: interactive mode must run from a local file. A piped
+'curl | sudo bash' cannot reach the keyboard for the TUI, so please
+download first and then run it:
 
   curl -fsSL ${RAW_BASE}/update.sh -o /tmp/rknpu.sh
   sudo bash /tmp/rknpu.sh
 
-Or run non-interactively:  ... | sudo bash -s -- --auto"
+For non-interactive/scripted use, piping is fine:
+  curl -fsSL ${RAW_BASE}/update.sh | sudo bash -s -- --auto" >&2
   exit "$E_GENERIC"
 }
 
 main() {
   parse_args "$@"
-  maybe_reexec_for_tui "$@"
-  [ -n "${RKNPU_REEXEC:-}" ] && SELF_TMP="$0"
+  require_local_run
   detect_ui
   preflight
 
@@ -500,7 +492,7 @@ package is replaced."
   fi
 
   local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/rknpu.XXXXXX")
-  trap 'rm -rf "$tmp"; [ -n "$SELF_TMP" ] && rm -f "$SELF_TMP"' EXIT
+  trap 'rm -rf "$tmp"' EXIT
 
   local manifest
   manifest=$(fetch_manifest "$tmp/manifest.tsv") \

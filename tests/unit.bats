@@ -152,17 +152,19 @@ setup() { load "test_helper"; }
   [ "$UI_BACKEND" = "auto" ]
 }
 
-@test "maybe_reexec_for_tui is a no-op in --auto mode" {
+@test "require_local_run is a no-op in --auto mode" {
   load_update
   MODE="auto"
-  run maybe_reexec_for_tui --auto
+  run require_local_run
   [ "$status" -eq 0 ]
 }
 
-@test "maybe_reexec_for_tui is a no-op when already re-exec'd" {
+@test "require_local_run proceeds when run from a real file" {
   load_update
   MODE="interactive"
-  RKNPU_REEXEC=1 run maybe_reexec_for_tui
+  # In the test harness the function's BASH_SOURCE is update.sh (a real file),
+  # so it must proceed (return 0), never exit.
+  run require_local_run
   [ "$status" -eq 0 ]
 }
 
