@@ -413,14 +413,16 @@ EZRKNPU (by Pelochus) is a one-command installer for Rockchip's NPU toolkits:
  - RKNN LLM       : runs LLMs (Qwen, DeepSeek, ...) on the NPU.
 It installs the required dependencies and libraries here in this terminal.
 
+Installing it is OPTIONAL but RECOMMENDED to actually use the NPU.
+
 Choose what to do:"
 
   case "$UI_BACKEND" in
     whiptail|dialog)
-      set -- none    "Do not install anything" \
-             full    "Install EZRKNPU full  (Toolkit 2 + LLM)" \
+      set -- full    "Install EZRKNPU full  (Toolkit 2 + LLM)  [recommended]" \
              toolkit "Install only RKNN Toolkit 2  (model conversion)" \
-             llm     "Install only RKNN LLM  (run LLMs)"
+             llm     "Install only RKNN LLM  (run LLMs)" \
+             none    "Do not install anything (optional)"
       [ "$allow" = "board" ] && set -- "$@" board "Pick my board manually (update the driver instead)"
       _menu "EZRKNPU" "$text" 5 "$@" || echo none ;;
     *)
