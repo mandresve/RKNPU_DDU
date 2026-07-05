@@ -109,6 +109,16 @@ manifest_find_by_hostname() {  # FILE HOSTNAME
   return 1
 }
 
+# Exact lookup by model id (col 1). Used for manual board selection.
+manifest_row_by_id() {  # FILE ID
+  local file="$1" id="$2" line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    [ "$(printf '%s' "$line" | cut -f1)" = "$id" ] && { printf '%s\n' "$line"; return 0; }
+  done < "$file"
+  return 1
+}
+
 # Split a manifest row into ROW_* globals.
 # ROW_DETECT is read positionally but unused (the match already happened in
 # manifest_find_by_model); it is kept for column-layout clarity.
@@ -197,6 +207,17 @@ ui_yesno() {  # TITLE MSG DEFAULT(yes|no)
         '')    [ "${3:-yes}" = "yes" ] ;;
         *)     return 1 ;;
       esac ;;
+  esac
+}
+
+# Show a menu (whiptail/dialog only) and echo the chosen tag. Non-zero if
+# cancelled or unavailable. Args: TITLE TEXT MENUHEIGHT tag item [tag item ...]
+_menu() {
+  local title="$1" text="$2" mh="$3"; shift 3
+  case "$UI_BACKEND" in
+    whiptail) whiptail --title "$title" --menu "$text" 20 74 "$mh" "$@" 3>&1 1>&2 2>&3 </dev/tty ;;
+    dialog)   dialog   --title "$title" --menu "$text" 20 74 "$mh" "$@" 3>&1 1>&2 2>&3 </dev/tty ;;
+    *)        return 1 ;;
   esac
 }
 
@@ -334,6 +355,47 @@ ui_install() {  # PURGE_PKG DEB
   return "$rc"
 }
 
+# Menu of the supported boards; echo the chosen model id. Non-zero if cancelled
+# or no menu backend. Used to correct a wrong auto-detection (interactive only).
+board_menu() {  # FILE
+  local line mid soc st
+  set --
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    st=$(printf '%s' "$line" | cut -f8)
+    [ "$st" = "supported" ] || continue
+    mid=$(printf '%s' "$line" | cut -f1)
+    soc=$(printf '%s' "$line" | cut -f3)
+    set -- "$@" "$mid" "$soc"
+  done < "$1"
+  [ "$#" -gt 0 ] || return 1
+  _menu "Select your board" "Pick the board that matches your hardware:" 8 "$@"
+}
+
+# Ask what to do next; echo one of: proceed | choose | cancel.
+# --auto always proceeds; plain mode offers only proceed/cancel.
+confirm_action() {
+  [ "$MODE" = "auto" ] && { echo proceed; return 0; }
+  case "$UI_BACKEND" in
+    whiptail|dialog)
+      local c
+      if c=$(_menu "$SELF_NAME" "What would you like to do?" 3 \
+               proceed "Update this board: $ROW_MODEL" \
+               choose  "Choose a different board (wrong detection?)" \
+               cancel  "Cancel -- make no changes"); then
+        echo "${c:-cancel}"
+      else
+        echo cancel
+      fi ;;
+    *)
+      if ui_yesno "$SELF_NAME" "Continue with this update?" "yes"; then
+        echo proceed
+      else
+        echo cancel
+      fi ;;
+  esac
+}
+
 preflight() {
   if [ "$MODE" != "auto" ] && [ ! -e /dev/tty ]; then
     echo "No TTY available: use --auto for non-interactive mode." >&2; exit "$E_GENERIC"
@@ -383,16 +445,20 @@ parse_args() {
 # itself. whiptail/dialog can show the first dialog (via </dev/tty) but the next
 # ones hang. For a reliable TUI, re-download ourselves to a temp file and re-exec
 # with stdin attached to the terminal (running as a plain file works fine).
-# Skipped for --auto, when already re-exec'd, or when stdin is already a terminal.
+# Skipped for --auto, when already re-exec'd, or when running from a real file.
 maybe_reexec_for_tui() {  # "$@" = original args
   [ "$MODE" = "auto" ] && return 0
   [ -n "${RKNPU_REEXEC:-}" ] && return 0
-  [ -t 0 ] && return 0
+  # Are we running from a real script file (not piped)? Do NOT use `[ -t 0 ]`:
+  # sudo's `use_pty` (default on Ubuntu/OrangePi) puts a pty on stdin even when
+  # the script is piped in. BASH_SOURCE reliably tells file from pipe.
+  local src="${BASH_SOURCE[0]:-}"
+  [ -n "$src" ] && [ -f "$src" ] && return 0
   [ -e /dev/tty ] || return 0
   command -v curl >/dev/null 2>&1 || return 0
   local self
   self=$(mktemp "${TMPDIR:-/tmp}/rknpu-self.XXXXXX") || return 0
-  if curl -fsSL "${RAW_BASE}/update.sh" -o "$self" 2>/dev/null && [ -s "$self" ]; then
+  if curl -fsSL --connect-timeout 15 "${RAW_BASE}/update.sh" -o "$self" 2>/dev/null && [ -s "$self" ]; then
     export RKNPU_REEXEC=1
     exec bash "$self" "$@" </dev/tty
   fi
@@ -440,7 +506,7 @@ package is replaced."
   manifest=$(fetch_manifest "$tmp/manifest.tsv") \
     || { ui_error "Could not fetch the manifest."; exit "$E_GENERIC"; }
 
-  # Identify the board: device-tree model first (hardware truth), hostname as fallback.
+  # Identify the board: device-tree model first (hardware truth), hostname fallback.
   local model host row detect_source detect_value
   model=$(get_model) || model=""
   host=$(get_hostname) || host=""
@@ -449,30 +515,49 @@ package is replaced."
   elif [ -n "$host" ] && row=$(manifest_find_by_hostname "$manifest" "$host"); then
     detect_source="hostname"; detect_value="$host"
   else
-    ui_info "$SELF_NAME" \
-"Could not identify this board as a supported model.
+    row=""
+  fi
+  [ -n "$row" ] && parse_row "$row"
+
+  # If detection failed or landed on an unsupported row, offer a manual pick
+  # (whiptail/dialog only); otherwise report it and exit.
+  if [ -z "$row" ] || [ "$ROW_STATUS" != "supported" ]; then
+    local why
+    if [ -z "$row" ]; then
+      why="Could not identify this board automatically.
   device-tree model: ${model:-<unreadable>}
-  hostname         : ${host:-<unknown>}
+  hostname         : ${host:-<unknown>}"
+    else
+      why="Detected '$ROW_MODEL' (via $detect_source), but it is not supported yet
+(status: $ROW_STATUS). No package is available for it in this release."
+    fi
+    case "$UI_BACKEND" in
+      whiptail|dialog)
+        ui_info "$SELF_NAME" "$why
+
+You can pick your board manually on the next screen."
+        local pick
+        if pick=$(board_menu "$manifest") && [ -n "$pick" ] && row=$(manifest_row_by_id "$manifest" "$pick"); then
+          parse_row "$row"; detect_source="manual selection"; detect_value="$pick"
+        else
+          ui_info "$SELF_NAME" "No board selected. Nothing was changed."
+          exit "$E_UNSUPPORTED"
+        fi ;;
+      *)
+        ui_info "$SELF_NAME" "$why
 
 $(device_list_text "$manifest")"
-    exit "$E_UNSUPPORTED"
+        exit "$E_UNSUPPORTED" ;;
+    esac
   fi
 
-  parse_row "$row"
-  if [ "$ROW_STATUS" != "supported" ]; then
-    ui_info "$SELF_NAME" \
-"Detected '$ROW_MODEL' (via $detect_source), but it is not supported yet
-(status: $ROW_STATUS). No package is available for it in this release.
-
-$(device_list_text "$manifest")"
-    exit "$E_UNSUPPORTED"
-  fi
-
-  local target="${ROW_TARGET:-$TARGET_FALLBACK}" current state
+  # Current driver version (board-independent).
+  local target current state
   current=$(get_current_version) \
     || { ui_error \
 "Could not read the current driver version from
 /sys/kernel/debug/rknpu/version (is the NPU present? are you root?)."; exit "$E_VERSION"; }
+  target="${ROW_TARGET:-$TARGET_FALLBACK}"
   state=$(version_state "$current" "$target")
   case "$state" in
     uptodate)
@@ -488,16 +573,18 @@ Continue anyway?" "no" \
     expected) : ;;
   esac
 
-  is_valid_sha256 "$ROW_SHA" \
-    || { ui_error "Incomplete manifest for $ROW_MODEL (invalid sha256)."; exit "$E_GENERIC"; }
-
-  local url deb debname
-  url=$(resolve_deb_url "$ROW_DEBPATH")
+  # Plan summary + confirmation, with an option to correct a wrong detection.
+  local url deb debname action
   deb="$tmp/update.deb"
-  debname=${ROW_DEBPATH##*/}
+  while :; do
+    parse_row "$row"
+    target="${ROW_TARGET:-$TARGET_FALLBACK}"
+    is_valid_sha256 "$ROW_SHA" \
+      || { ui_error "Incomplete manifest for $ROW_MODEL (invalid sha256)."; exit "$E_GENERIC"; }
+    url=$(resolve_deb_url "$ROW_DEBPATH")
+    debname=${ROW_DEBPATH##*/}
 
-  # Explicit plan summary (shown as a dialog interactively; logged in --auto).
-  ui_info "$SELF_NAME" \
+    ui_info "$SELF_NAME" \
 "Update summary
 --------------
 Board             : $ROW_MODEL ($ROW_SOC)
@@ -514,8 +601,18 @@ When you continue, RKNPU_DDU will:
 
 It will NOT touch your files, home directory or configuration."
 
-  ui_yesno "$SELF_NAME" "Continue with this update?" "yes" \
-    || { ui_info "$SELF_NAME" "Cancelled. Nothing was changed."; exit "$E_OK"; }
+    action=$(confirm_action)
+    case "$action" in
+      proceed) break ;;
+      choose)
+        local pick2 nr
+        if pick2=$(board_menu "$manifest") && [ -n "$pick2" ] && nr=$(manifest_row_by_id "$manifest" "$pick2"); then
+          row="$nr"; detect_source="manual selection"; detect_value="$pick2"
+        fi
+        continue ;;
+      *) ui_info "$SELF_NAME" "Cancelled. Nothing was changed."; exit "$E_OK" ;;
+    esac
+  done
 
   if [ "$DRY_RUN" = "yes" ]; then
     ui_info "$SELF_NAME" \

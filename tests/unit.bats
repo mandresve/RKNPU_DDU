@@ -98,6 +98,21 @@ setup() { load "test_helper"; }
   [ "$status" -ne 0 ]
 }
 
+@test "manifest_row_by_id finds a row by exact model id" {
+  load_update
+  run manifest_row_by_id "$FIXTURES/manifest.tsv" "orangepi5b"
+  [ "$status" -eq 0 ]; [[ "$output" == orangepi5b* ]]
+  run manifest_row_by_id "$FIXTURES/manifest.tsv" "orangepi5"
+  [ "$status" -ne 0 ]
+}
+
+@test "confirm_action returns proceed in auto mode" {
+  load_update
+  MODE="auto"
+  run confirm_action
+  [ "$output" = "proceed" ]
+}
+
 @test "parse_row splits the fields" {
   load_update
   row=$(manifest_find_by_model "$FIXTURES/manifest.tsv" "Orange Pi 5 Pro")
