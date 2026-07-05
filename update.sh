@@ -7,7 +7,7 @@ set -u
 readonly SELF_NAME="RKNPU_DDU"
 readonly SELF_VERSION="1.0.0"
 readonly REPO="mandresve/RKNPU_DDU"
-readonly BRANCH="master"
+readonly BRANCH="main"
 RAW_BASE="${RKNPU_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/${BRANCH}}"
 readonly MANIFEST_URL="${RAW_BASE}/manifest.tsv"
 readonly TARGET_FALLBACK="0.9.8"

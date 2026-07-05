@@ -35,7 +35,7 @@ compile the kernel and submit a `.deb` for your board.
 One-liner version, ready to go, just paste it in your terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.sh -o /tmp/rknpu.sh && sudo bash /tmp/rknpu.sh
+curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/main/update.sh -o /tmp/rknpu.sh && sudo bash /tmp/rknpu.sh
 ```
 
 The tool auto-detects your board (with a menu to correct it if wrong), shows the current
@@ -48,13 +48,13 @@ For orchestration from other scripts. Arguments go after `-s --`:
 
 ```bash
 # Update and stop (caller decides when to reboot)
-curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.sh | sudo bash -s -- --auto
+curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/main/update.sh | sudo bash -s -- --auto
 
 # Update and reboot automatically when done
-curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.sh | sudo bash -s -- --auto --reboot
+curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/main/update.sh | sudo bash -s -- --auto --reboot
 
 # See exactly what would happen without touching the system
-curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/master/update.sh | sudo bash -s -- --auto --dry-run
+curl -fsSL https://raw.githubusercontent.com/mandresve/RKNPU_DDU/main/update.sh | sudo bash -s -- --auto --dry-run
 ```
 
 > `--auto` needs no terminal, so piping into `sudo bash` is fine here (and is the right
